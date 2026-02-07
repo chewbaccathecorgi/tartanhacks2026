@@ -1,15 +1,18 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
+import { FaceLandmarker, HandLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 
 // ─── Types ─────────────────────────────────────────────────────────
 type InboundMessage =
   | { type: 'registered'; role: 'viewer'; streamerReady?: boolean }
   | { type: 'streamer-ready' }
   | { type: 'streamer-disconnected' }
+  | { type: 'processor-ready' }
+  | { type: 'processor-disconnected' }
   | { type: 'offer'; offer: RTCSessionDescriptionInit }
   | { type: 'candidate'; candidate: RTCIceCandidateInit }
+  | { type: 'face-result'; faceId: number; results: unknown; timestamp: number }
   | { type: 'error'; message: string };
 
 interface DetectedFace {
@@ -130,6 +133,54 @@ async function initFaceLandmarker(): Promise<FaceLandmarker> {
   return landmarker;
 }
 
+// ─── Hand Landmarker Setup ──────────────────────────────────────────
+async function initHandLandmarker(): Promise<HandLandmarker> {
+  const vision = await FilesetResolver.forVisionTasks(
+    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm'
+  );
+  const handLandmarker = await HandLandmarker.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath:
+        'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+      delegate: 'GPU',
+    },
+    runningMode: 'VIDEO',
+    numHands: 2,
+    minHandDetectionConfidence: 0.5,
+    minHandPresenceConfidence: 0.5,
+    minTrackingConfidence: 0.5,
+  });
+  console.log('[HandLandmarker] Initialized (21 landmarks, up to 2 hands)');
+  return handLandmarker;
+}
+
+// ─── Peace Sign Detection ───────────────────────────────────────────
+// MediaPipe hand landmarks:
+//   0 = wrist
+//   4 = thumb tip,    3 = thumb IP,    2 = thumb MCP
+//   8 = index tip,    6 = index PIP,   5 = index MCP
+//  12 = middle tip,  10 = middle PIP,  9 = middle MCP
+//  16 = ring tip,    14 = ring PIP,   13 = ring MCP
+//  20 = pinky tip,   18 = pinky PIP,  17 = pinky MCP
+//
+// A finger is "extended" if its tip is farther from the wrist than its PIP joint.
+// Peace sign = index + middle extended, ring + pinky curled.
+function isPeaceSign(landmarks: { x: number; y: number; z: number }[]): boolean {
+  if (landmarks.length < 21) return false;
+
+  // Use y-coordinate: lower y = higher on screen (finger pointing up)
+  const indexExtended  = landmarks[8].y  < landmarks[6].y;
+  const middleExtended = landmarks[12].y < landmarks[10].y;
+  const ringCurled     = landmarks[16].y > landmarks[14].y;
+  const pinkyCurled    = landmarks[20].y > landmarks[18].y;
+
+  return indexExtended && middleExtended && ringCurled && pinkyCurled;
+}
+
+// Cooldown to prevent spamming (ms)
+const GESTURE_COOLDOWN_MS = 2000;
+let lastGestureTime = 0;
+
 // ─── Video display area (handles object-fit: contain) ───────────────
 // The video element uses object-fit:contain, so with a portrait phone
 // stream in a landscape container there are black bars on the sides.
@@ -209,6 +260,36 @@ function drawBoundingBoxes(
   }
 }
 
+// ─── Crop Face from Video ───────────────────────────────────────────
+// Given a video element and a normalized bounding box, crop the face
+// region to a base64 JPEG string.
+function cropFaceFromVideo(
+  video: HTMLVideoElement,
+  face: DetectedFace,
+  quality = 0.92
+): string | null {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  if (!vw || !vh) return null;
+
+  // Convert normalized coords to pixel coords on the raw video
+  const sx = Math.max(0, Math.floor(face.x * vw));
+  const sy = Math.max(0, Math.floor(face.y * vh));
+  const sw = Math.min(Math.floor(face.width * vw), vw - sx);
+  const sh = Math.min(Math.floor(face.height * vh), vh - sy);
+
+  if (sw <= 0 || sh <= 0) return null;
+
+  const cropCanvas = document.createElement('canvas');
+  cropCanvas.width = sw;
+  cropCanvas.height = sh;
+  const ctx = cropCanvas.getContext('2d');
+  if (!ctx) return null;
+
+  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+  return cropCanvas.toDataURL('image/jpeg', quality);
+}
+
 // ─── Component ─────────────────────────────────────────────────────
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -217,14 +298,19 @@ export default function Home() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const detectorRef = useRef<FaceLandmarker | null>(null);
+  const handDetectorRef = useRef<HandLandmarker | null>(null);
   const animFrameRef = useRef<number>(0);
   const lastDetectTimeRef = useRef<number>(0);
+  const latestFacesRef = useRef<SmoothedFace[]>([]);
 
   const [isConnected, setIsConnected] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [status, setStatus] = useState('Not connected');
   const [faceCount, setFaceCount] = useState(0);
   const [detectionEnabled, setDetectionEnabled] = useState(true);
+  const [gestureDetected, setGestureDetected] = useState(false);
+  const [processorConnected, setProcessorConnected] = useState(false);
+  const [lastSentFace, setLastSentFace] = useState<string | null>(null);
 
   // ─── Face Detection Loop ──────────────────────────────────────
   const runDetection = useCallback(() => {
@@ -264,6 +350,7 @@ export default function Home() {
         );
 
         const smoothed = matchAndSmooth(rawFaces);
+        latestFacesRef.current = smoothed;
         const activeFaces = smoothed.filter((f) => f.age === 0);
         setFaceCount(activeFaces.length);
 
@@ -272,6 +359,60 @@ export default function Home() {
         drawBoundingBoxes(ctx, smoothed, canvas.width, canvas.height, area);
       } catch {
         // Detection might fail on some frames; just skip
+      }
+
+      // ─── Hand Gesture Detection ───────────────────────────────
+      const handDetector = handDetectorRef.current;
+      if (handDetector) {
+        try {
+          const handResult = handDetector.detectForVideo(video, now);
+          if (handResult.landmarks && handResult.landmarks.length > 0) {
+            for (const handLandmarks of handResult.landmarks) {
+              if (isPeaceSign(handLandmarks)) {
+                const timeSinceLastGesture = now - lastGestureTime;
+                if (timeSinceLastGesture > GESTURE_COOLDOWN_MS) {
+                  lastGestureTime = now;
+                  console.log('[Gesture] ✌️ PEACE SIGN DETECTED!');
+                  setGestureDetected(true);
+                  setTimeout(() => setGestureDetected(false), 1000);
+
+                  // ─── Crop best face & send to processor ───────
+                  const currentFaces = latestFacesRef.current.filter((f) => f.age === 0);
+                  if (currentFaces.length > 0 && video) {
+                    // Pick the largest face (biggest bounding box area = most prominent)
+                    const bestFace = currentFaces.reduce((best, f) =>
+                      f.width * f.height > best.width * best.height ? f : best
+                    );
+
+                    const faceImage = cropFaceFromVideo(video, bestFace);
+                    if (faceImage) {
+                      console.log(`[Gesture] Cropped face #${bestFace.id} (${Math.round(faceImage.length / 1024)}KB)`);
+                      setLastSentFace(faceImage);
+
+                      // Send via WebSocket to processor
+                      const ws = wsRef.current;
+                      if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({
+                          type: 'face-image',
+                          image: faceImage,
+                          faceId: bestFace.id,
+                          timestamp: Date.now(),
+                        }));
+                        console.log(`[Gesture] Sent face #${bestFace.id} to processor`);
+                      } else {
+                        console.warn('[Gesture] WebSocket not connected, cannot send face');
+                      }
+                    }
+                  } else {
+                    console.log('[Gesture] Peace sign detected but no active faces to send');
+                  }
+                }
+              }
+            }
+          }
+        } catch {
+          // Hand detection might fail on some frames; just skip
+        }
       }
     }
 
@@ -291,11 +432,24 @@ export default function Home() {
       console.error('[FaceLandmarker] Init failed:', err);
     });
 
+    initHandLandmarker().then((hl) => {
+      if (!cancelled) {
+        handDetectorRef.current = hl;
+        console.log('[HandLandmarker] Ready');
+      }
+    }).catch((err) => {
+      console.error('[HandLandmarker] Init failed:', err);
+    });
+
     return () => {
       cancelled = true;
       if (detectorRef.current) {
         detectorRef.current.close();
         detectorRef.current = null;
+      }
+      if (handDetectorRef.current) {
+        handDetectorRef.current.close();
+        handDetectorRef.current = null;
       }
     };
   }, []);
@@ -484,6 +638,21 @@ export default function Home() {
               }
               break;
 
+            case 'processor-ready':
+              setProcessorConnected(true);
+              console.log('[Viewer] Processor connected');
+              break;
+
+            case 'processor-disconnected':
+              setProcessorConnected(false);
+              console.log('[Viewer] Processor disconnected');
+              break;
+
+            case 'face-result':
+              console.log('[Viewer] Received face result:', payload);
+              // TODO: Display results on the UI next to the bounding box
+              break;
+
             case 'error':
               setStatus(`Error: ${payload.message}`);
               break;
@@ -667,7 +836,74 @@ export default function Home() {
               </div>
             </div>
           </div>
+          <div style={{
+            ...styles.infoCard,
+            borderColor: gestureDetected ? '#10b981' : '#262626',
+            transition: 'border-color 0.3s ease',
+          }}>
+            <div style={styles.infoIcon}>✌️</div>
+            <div>
+              <div style={styles.infoLabel}>Gesture</div>
+              <div style={{
+                ...styles.infoValue,
+                color: gestureDetected ? '#10b981' : '#a1a1a1',
+                transition: 'color 0.3s ease',
+              }}>
+                {gestureDetected ? 'Peace Sign!' : 'Waiting...'}
+              </div>
+            </div>
+          </div>
+          <div style={{
+            ...styles.infoCard,
+            borderColor: processorConnected ? '#10b981' : '#262626',
+          }}>
+            <div style={styles.infoIcon}>💻</div>
+            <div>
+              <div style={styles.infoLabel}>Processor</div>
+              <div style={{
+                ...styles.infoValue,
+                color: processorConnected ? '#10b981' : '#a1a1a1',
+              }}>
+                {processorConnected ? 'Connected' : 'Not connected'}
+              </div>
+            </div>
+          </div>
         </div>
+
+        {/* Last Sent Face Preview */}
+        {lastSentFace && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '16px',
+            padding: '16px 20px',
+            backgroundColor: '#141414',
+            borderRadius: '12px',
+            border: '1px solid #262626',
+            maxWidth: '800px',
+            width: '100%',
+          }}>
+            <img
+              src={lastSentFace}
+              alt="Last sent face"
+              style={{
+                width: '64px',
+                height: '64px',
+                objectFit: 'cover',
+                borderRadius: '8px',
+                border: '1px solid #333',
+              }}
+            />
+            <div>
+              <div style={{ fontSize: '13px', color: '#a1a1a1', marginBottom: '4px' }}>
+                Last Captured Face
+              </div>
+              <div style={{ fontSize: '14px', fontWeight: 500, color: '#fff' }}>
+                {processorConnected ? 'Sent to processor' : 'Waiting for processor...'}
+              </div>
+            </div>
+          </div>
+        )}
       </main>
 
       {/* Footer */}
