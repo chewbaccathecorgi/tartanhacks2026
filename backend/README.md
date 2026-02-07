@@ -75,6 +75,40 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 Then open `http://localhost:8000/docs` for Swagger, or call the API from another client. Again, Postgres and `DATABASE_URL` are required.
 
+**3. Supabase (database only)**
+
+Use Supabase as your Postgres + pgvector host:
+
+1. **Create a project** at [supabase.com](https://supabase.com) → New project → set password and region.
+2. **Enable pgvector:** Dashboard → **Database** → **Extensions** → search “vector” → enable **vector**.
+3. **Get the connection string:** **Project Settings** (gear) → **Database** → **Connection string** → **URI**. Copy it; replace `[YOUR-PASSWORD]` with your DB password.
+4. **Set in `backend/.env`:**
+   ```env
+   DATABASE_URL=postgresql://postgres.[project-ref]:[YOUR-PASSWORD]@db.[project-ref].supabase.co:5432/postgres?sslmode=require
+   ```
+   - **For migrations:** Use the **Direct connection** (port 5432, host `db.[ref].supabase.co`). The Transaction pooler (port 6543) may not support `CREATE EXTENSION`.
+   - **For app runtime:** Either Direct or pooler works; pooler (6543) is preferred for serverless.
+   - **SSL:** Add `?sslmode=require` if missing; the config auto-appends it for Supabase URLs.
+5. **Run migrations** (from `backend/`):
+   ```bash
+   python scripts/run_migrations.py
+   ```
+6. **Run the test** (optional):
+   ```bash
+   python scripts/test_db_pipeline.py
+   ```
+7. Run the FastAPI app (locally or on a host); it will use the same `DATABASE_URL` and talk to Supabase.
+
+**4. Deployment (non-localhost)**
+
+The app is deployment-ready: it binds to `0.0.0.0` by default and reads all settings from env.
+
+- Set **`DATABASE_URL`** to your production Postgres (e.g. Neon, Supabase, RDS). Use `?sslmode=require` if the host requires TLS.
+- Set **`CORS_ORIGINS`** to your frontend origin(s), comma-separated (e.g. `https://your-app.vercel.app`). Use `*` only if you accept any origin.
+- **`HOST`** defaults to `0.0.0.0`; **`PORT`** defaults to `8000` (override with `PORT` on Railway, Render, Fly.io, etc.).
+- Run migrations once against the production DB: `python scripts/run_migrations.py` (with `DATABASE_URL` set).
+- Start the server: `uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}` (omit `--reload` in production).
+
 **Python dependencies** are in `requirements-base.txt`; install with `pip install -r requirements.txt`. The test script is deterministic (fixed seed); dimensions use config (default 512 / 1536)—set `FACE_EMBEDDING_DIM` and `TEXT_EMBEDDING_DIM` to match your migrated schema.
 
 ---
