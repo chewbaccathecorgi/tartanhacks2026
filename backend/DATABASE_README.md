@@ -201,7 +201,7 @@ psql $DATABASE_URL -f migrations/002_vectors.sql
 psql $DATABASE_URL -f migrations/003_constraints.sql
 ```
 
-Set `DATABASE_URL` to your Postgres connection string (e.g. `postgresql://user:pass@localhost:5432/dbname`).
+Set `DATABASE_URL` to your Postgres connection string (e.g. `postgresql://user:pass@host:5432/dbname` or a cloud URI with `?sslmode=require`).
 
 ---
 

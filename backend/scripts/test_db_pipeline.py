@@ -40,9 +40,28 @@ from app.repositories import (
 )
 from app.services.consent_service import customer_opt_out
 from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError
 
 SEED = 42
 TEST_PREFIX = "test-e2e-"
+
+
+def _check_db() -> None:
+    """Fail fast with a clear message if Postgres is not reachable."""
+    try:
+        with get_db() as db:
+            db.execute(select(1))
+    except OperationalError as e:
+        if "5432" in str(e) or "Connection refused" in str(e) or "could not connect" in str(e).lower():
+            print(
+                "[FAIL] Cannot connect to Postgres. Is it running?\n"
+                "  1. Get a DB URL: sign up at https://neon.tech or https://supabase.com (free, pgvector included).\n"
+                "  2. Set DATABASE_URL in backend/.env to that connection string.\n"
+                "  3. Run migrations: python scripts/run_migrations.py\n"
+                "  4. Run this script again.",
+                file=sys.stderr,
+            )
+        raise SystemExit(1) from e
 
 
 def _synthetic_vector(dim: int, seed_offset: int = 0) -> list[float]:
@@ -52,6 +71,7 @@ def _synthetic_vector(dim: int, seed_offset: int = 0) -> list[float]:
 
 
 def _run() -> None:
+    _check_db()
     settings = get_settings()
     face_dim = getattr(settings, "face_embedding_dim", 512)
     text_dim = getattr(settings, "text_embedding_dim", 1536)
