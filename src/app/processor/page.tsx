@@ -35,7 +35,7 @@ export default function ProcessorPage() {
 
   useEffect(() => {
     fetchFaces();
-    const interval = setInterval(fetchFaces, 1500);
+    const interval = setInterval(fetchFaces, 1000);
     return () => clearInterval(interval);
   }, [fetchFaces]);
 
@@ -149,7 +149,7 @@ export default function ProcessorPage() {
             </div>
             <h2 style={styles.emptyTitle}>No people captured yet</h2>
             <p style={styles.emptySubtitle}>
-              Show a peace sign on the glasses stream to capture faces
+              On the stream page: start a stream, then either start recording (faces auto-save every 2s) or click &quot;Save faces now&quot; / show a peace sign to capture faces. They will appear here.
             </p>
           </div>
         ) : (

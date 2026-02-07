@@ -246,24 +246,30 @@ export default function ProfilePage() {
 
   const saveName = async () => {
     if (!profile) return;
-    await fetch(`/api/faces/${id}`, {
+    const res = await fetch(`/api/faces/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: nameVal }),
     });
-    setEditingName(false);
-    fetchProfile();
+    if (res.ok) {
+      showToast('Name saved');
+      setEditingName(false);
+      fetchProfile();
+    }
   };
 
   const saveDesc = async () => {
     if (!profile) return;
-    await fetch(`/api/faces/${id}`, {
+    const res = await fetch(`/api/faces/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ description: descVal }),
     });
-    setEditingDesc(false);
-    fetchProfile();
+    if (res.ok) {
+      showToast('Description saved');
+      setEditingDesc(false);
+      fetchProfile();
+    }
   };
 
   const downloadImage = (img: FaceImage, idx: number) => {

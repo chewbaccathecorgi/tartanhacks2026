@@ -42,9 +42,9 @@ function patchConsoleForTFLite() {
 if (typeof window !== 'undefined') patchConsoleForTFLite();
 
 // ─── Smoothing / Tracking ───────────────────────────────────────────
-const SMOOTHING = 0.25;       // slightly faster tracking response
-const MAX_MATCH_DIST = 0.22;  // more forgiving ID matching
-const MAX_AGE = 10;           // keep ghost boxes longer
+const SMOOTHING = 0.22;       // snappier tracking for glasses stream
+const MAX_MATCH_DIST = 0.25;  // more forgiving ID matching across frames
+const MAX_AGE = 12;           // keep ghost boxes longer (avoid flicker)
 
 let nextFaceId = 0;
 let trackedFaces: SmoothedFace[] = [];
@@ -116,9 +116,9 @@ function landmarksToBBox(landmarks: { x: number; y: number }[]): DetectedFace {
 }
 
 // ─── Filter out WhatsApp UI false positives + hands/fingers ─────────
-const UI_TOP_CUTOFF = 0.06;
-const UI_BOTTOM_CUTOFF = 0.92;
-const MIN_FACE_SIZE = 0.03;    // reject tiny "faces" (often noise/fingers)
+const UI_TOP_CUTOFF = 0.04;
+const UI_BOTTOM_CUTOFF = 0.94;
+const MIN_FACE_SIZE = 0.025;   // allow slightly smaller faces (glasses stream)
 
 function filterGlassesStreamFaces(faces: DetectedFace[]): DetectedFace[] {
   return faces.filter((f) => {
@@ -126,10 +126,8 @@ function filterGlassesStreamFaces(faces: DetectedFace[]): DetectedFace[] {
     if (cy < UI_TOP_CUTOFF || cy > UI_BOTTOM_CUTOFF) return false;
     if (f.width < MIN_FACE_SIZE || f.height < MIN_FACE_SIZE) return false;
 
-    // Aspect ratio filter: real faces are roughly 0.6–1.2 w/h ratio.
-    // Fingers/hands tend to be very tall+narrow or very wide+flat.
     const aspect = f.width / f.height;
-    if (aspect < 0.4 || aspect > 1.8) return false;
+    if (aspect < 0.35 || aspect > 2.0) return false;
 
     return true;
   });
@@ -148,10 +146,10 @@ async function initModels() {
       delegate: 'GPU',
     },
     runningMode: 'VIDEO',
-    numFaces: 8,                       // detect more faces
-    minFaceDetectionConfidence: 0.4,   // balanced: catches faces, rejects hands
-    minFacePresenceConfidence: 0.4,
-    minTrackingConfidence: 0.35,
+    numFaces: 8,
+    minFaceDetectionConfidence: 0.35,   // lower = catch more faces (glasses/small)
+    minFacePresenceConfidence: 0.35,
+    minTrackingConfidence: 0.3,
     outputFaceBlendshapes: false,
     outputFacialTransformationMatrixes: false,
   });
@@ -289,9 +287,10 @@ export default function Home() {
   const capturingRef = useRef(false);
   const recordingIdRef = useRef<string | null>(null);
 
-  // Auto-capture during recording
+  // Auto-capture during recording (don't stack; only next cycle after previous completes)
   const lastAutoCaptureRef = useRef<number>(0);
   const knownFaceIdsRef = useRef<Set<number>>(new Set());
+  const autoCaptureInProgressRef = useRef(false);
 
   // Audio recording
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -309,6 +308,8 @@ export default function Home() {
   const isRecordingRef = useRef(false); // ref mirror to avoid stale closures
   const [lastCapture, setLastCapture] = useState('');
   const [recordingTime, setRecordingTime] = useState(0);
+  const [sharePending, setSharePending] = useState(false);
+  const [captureInProgress, setCaptureInProgress] = useState(false);
 
   // Recording timer
   const recordingStartRef = useRef<number>(0);
@@ -406,17 +407,27 @@ export default function Home() {
 
   // ─── Capture Screen (share entire screen for video + system audio) ──
   const captureScreen = useCallback(async () => {
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      setStatus('Screen share not supported in this browser');
+      return;
+    }
+    if (typeof window !== 'undefined' && !window.isSecureContext) {
+      setStatus('Use HTTPS (e.g. your ngrok URL) for screen share');
+      return;
+    }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
-    setStatus('Share your ENTIRE SCREEN (not window) for audio...');
+    setSharePending(true);
+    setStatus('Opening share dialog… select Entire Screen + system audio');
     try {
-      // Must share entire screen (not a window) to get system audio on Windows
+      // Call getDisplayMedia immediately so it runs in the user gesture context
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
         audio: true,
       });
+      setSharePending(false);
       const hasAudio = stream.getAudioTracks().length > 0;
       console.log(`[Capture] Got stream: video=${stream.getVideoTracks().length}, audio=${hasAudio}`);
       if (!hasAudio) {
@@ -424,8 +435,18 @@ export default function Home() {
       }
       attachStream(stream);
       setStatus(hasAudio ? 'Live — Screen + Audio' : 'Live — Screen (no audio — reshare as Entire Screen)');
-    } catch {
-      setStatus('Screen share cancelled');
+    } catch (err) {
+      setSharePending(false);
+      const message = err instanceof Error ? err.message : String(err);
+      const name = err instanceof Error ? err.name : '';
+      if (name === 'NotAllowedError' || message.toLowerCase().includes('permission') || message.toLowerCase().includes('denied')) {
+        setStatus('Share cancelled or denied — click again and choose a source');
+      } else if (message.toLowerCase().includes('cancel')) {
+        setStatus('Share cancelled');
+      } else {
+        setStatus(`Share failed: ${message.slice(0, 50)}`);
+      }
+      console.error('[Capture] getDisplayMedia failed:', err);
     }
   }, [attachStream]);
 
@@ -554,56 +575,62 @@ export default function Home() {
     }
   }, [startAudioCapture, stopAudioCapture]);
 
-  // ─── Capture faces and send to /api/faces ─────────────────────
+  // ─── Capture faces and send to /api/faces (relative URLs = ngrok-compatible) ─────────────────────
   const captureFaces = useCallback(async (source: 'peace' | 'auto' = 'peace') => {
     const video = videoRef.current;
-    if (!video || capturingRef.current) return;
+    if (!video) return;
+    if (source === 'peace' && capturingRef.current) return;
+    if (source === 'auto' && autoCaptureInProgressRef.current) return;
 
     const activeFaces = trackedFaces.filter((f) => f.age === 0);
     if (activeFaces.length === 0) return;
 
-    capturingRef.current = true;
+    setCaptureInProgress(true);
+    if (source === 'peace') capturingRef.current = true;
+    if (source === 'auto') autoCaptureInProgressRef.current = true;
     let count = 0;
 
-    for (const face of activeFaces) {
-      const imgData = cropFaceFromVideo(video, face);
-      if (!imgData) continue;
+    try {
+      for (const face of activeFaces) {
+        const imgData = cropFaceFromVideo(video, face);
+        if (!imgData) continue;
 
-      try {
-        const res = await fetch('/api/faces', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ imageData: imgData }),
-        });
-        if (res.ok) {
-          count++;
-          // Link profile to active recording
-          const data = await res.json();
-          if (recordingIdRef.current && data.face?.id) {
-            fetch('/api/recording', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                action: 'addProfile',
-                profileId: data.face.id,
-              }),
-            }).catch(() => {});
+        try {
+          const res = await fetch('/api/faces', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ imageData: imgData }),
+          });
+          if (res.ok) {
+            count++;
+            const data = await res.json();
+            if (recordingIdRef.current && data.face?.id) {
+              await fetch('/api/recording', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'addProfile', profileId: data.face.id }),
+              }).catch(() => {});
+            }
           }
+        } catch (err) {
+          console.error('[Capture] Failed to send face:', err);
         }
-      } catch (err) {
-        console.error('[Capture] Failed to send face:', err);
       }
+    } finally {
+      if (source === 'peace') capturingRef.current = false;
+      if (source === 'auto') autoCaptureInProgressRef.current = false;
+      setCaptureInProgress(false);
     }
 
-    if (count > 0 && source === 'peace') {
+    if (source === 'auto' && count > 0) {
+      setLastCapture(`Saved ${count} to profiles`);
+      setTimeout(() => setLastCapture(''), 2000);
+      console.log(`[AutoCapture] Sent ${count} face(s) to /api/faces`);
+    } else if (count > 0) {
       setLastCapture(`Captured ${count} face${count > 1 ? 's' : ''}`);
-      console.log(`[Capture] Sent ${count} face(s) to /api/faces`);
       setTimeout(() => setLastCapture(''), 3000);
-    } else if (count > 0 && source === 'auto') {
-      console.log(`[AutoCapture] Sent ${count} face(s) during recording`);
+      console.log(`[Capture] Sent ${count} face(s) to /api/faces`);
     }
-
-    capturingRef.current = false;
   }, []);
 
   // ─── Detection Loop ───────────────────────────────────────────
@@ -647,22 +674,17 @@ export default function Home() {
         const area = getVideoDisplayArea(video, canvas.width, canvas.height);
         drawBoundingBoxes(ctx, smoothed, canvas.width, canvas.height, area);
 
-        // ── Auto-capture during recording ──
-        if (recordingIdRef.current && activeFaces.length > 0) {
-          // Check for new faces (IDs we haven't seen before)
-          let newFaceFound = false;
+        // ── Auto-capture during recording: fixed interval + on new face (consistent flow to People) ──
+        if (recordingIdRef.current && activeFaces.length > 0 && !autoCaptureInProgressRef.current) {
           for (const f of activeFaces) {
-            if (!knownFaceIdsRef.current.has(f.id)) {
-              knownFaceIdsRef.current.add(f.id);
-              newFaceFound = true;
-            }
+            knownFaceIdsRef.current.add(f.id);
           }
-
-          // Capture on new face or every 3 seconds
           const elapsed = now - lastAutoCaptureRef.current;
-          if (newFaceFound || elapsed >= 3000) {
-            lastAutoCaptureRef.current = now;
-            captureFaces('auto');
+          const intervalMs = 2000; // capture every 2s when faces visible for steady flow to People
+          if (elapsed >= intervalMs) {
+            captureFaces('auto').then(() => {
+              lastAutoCaptureRef.current = performance.now();
+            });
           }
         }
       } catch { /* skip frame */ }
@@ -778,8 +800,16 @@ export default function Home() {
         {/* Controls */}
         {!isStreaming ? (
           <div style={styles.controlsSection}>
-            <button onClick={captureScreen} style={styles.btnPrimary}>
-              Share Screen (with Call Audio)
+            <button
+              onClick={captureScreen}
+              disabled={sharePending}
+              style={{
+                ...styles.btnPrimary,
+                opacity: sharePending ? 0.7 : 1,
+                cursor: sharePending ? 'wait' : 'pointer',
+              }}
+            >
+              {sharePending ? 'Opening share dialog…' : 'Share Screen (with Call Audio)'}
             </button>
             <div style={styles.divider}>
               <div style={styles.dividerLine} />
@@ -809,9 +839,21 @@ export default function Home() {
           </div>
         ) : (
           <div style={styles.controlsSection}>
-            <div style={{ display: 'flex', gap: '10px', width: '100%' }}>
-              <button onClick={stopCapture} style={{ ...styles.btnDanger, flex: 1 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', width: '100%' }}>
+              <button onClick={stopCapture} style={{ ...styles.btnDanger, flex: 1, minWidth: '120px' }}>
                 Stop Stream
+              </button>
+              <button
+                onClick={() => captureFaces('peace')}
+                disabled={faceCount === 0 || captureInProgress}
+                style={{
+                  ...styles.btnSecondary,
+                  opacity: faceCount > 0 && !captureInProgress ? 1 : 0.5,
+                  cursor: faceCount > 0 && !captureInProgress ? 'pointer' : 'not-allowed',
+                }}
+                title="Save current faces to People"
+              >
+                {captureInProgress ? 'Saving…' : 'Save faces now'}
               </button>
               {isRecording && (
                 <button onClick={toggleRecording} style={styles.btnStopRec}>
@@ -863,7 +905,8 @@ export default function Home() {
                 <h2 style={styles.placeholderTitle}>Ready</h2>
                 <p style={styles.placeholderSubtitle}>
                   Click <strong>Share Screen</strong> and select <strong>Entire Screen</strong>
-                  {' '}(not window) with <strong>Share system audio</strong> checked
+                  {' '}(not window) with <strong>Share system audio</strong> checked.
+                  {' '}That same feed is what OBS and WhatsApp can capture.
                 </p>
               </div>
             </div>

@@ -17,12 +17,11 @@ const { WebSocketServer } = require('ws');
 const { handleConnection } = require('./backend/signaling');
 
 const dev = process.env.NODE_ENV !== 'production';
-// BIND_HOST instead of HOSTNAME — Azure App Service sets HOSTNAME to the
-// container name which breaks server.listen(). Always bind 0.0.0.0.
-const hostname = process.env.BIND_HOST || '0.0.0.0';
 const port = parseInt(process.env.PORT || '3001', 10);
-
-const app = next({ dev, hostname, port });
+// Next needs a valid host for script URLs (not 0.0.0.0). When using ngrok, set NEXT_HOSTNAME to your ngrok host.
+const nextHostname = process.env.NEXT_HOSTNAME || 'localhost';
+const app = next({ dev, hostname: nextHostname, port });
+const listenHost = process.env.BIND_HOST || '0.0.0.0';
 const handle = app.getRequestHandler();
 
 app.prepare().then(() => {
@@ -56,8 +55,8 @@ app.prepare().then(() => {
     // left alone so Next.js can handle them internally for HMR.
   });
 
-  server.listen(port, hostname, () => {
-    console.log(`> Ready on http://${hostname}:${port}`);
+  server.listen(port, listenHost, () => {
+    console.log(`> Ready on http://${listenHost}:${port}`);
     console.log(`> WebSocket signaling server running`);
   });
 });

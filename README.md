@@ -2,7 +2,7 @@
 
 Real-time face detection and recognition from Meta Glasses video stream. Uses MediaPipe for in-browser face/gesture detection and Azure Face API for profile deduplication.
 
-**Hosting:** The app runs on **Azure App Service** (no ngrok). Streaming and the processor work the same as before. Full setup and where to get the Face API key: **[AZURE_SETUP.md](./AZURE_SETUP.md)**.
+**Hosting:** Everything runs via **ngrok**. You run `npm run dev` (app listens on port 3001), then point **ngrok** at 3001 and use the ngrok URL for streaming and the app. No localhost for access. Azure is only for **Face API** (keys in `.env.local`). See **[AZURE_SETUP.md](./AZURE_SETUP.md)** for the Face API key.
 
 ## Project Structure
 
@@ -25,79 +25,50 @@ tartanhacks2026/
 └── package.json
 ```
 
-## Local Development
+## Run the app (ngrok)
 
 ```bash
 # 1. Install dependencies
 npm install
 
-# 2. Copy environment template and fill in your Azure keys
+# 2. Copy environment template and fill in your Azure Face API keys (optional; for face dedup)
 cp .env.example .env.local
-# Edit .env.local with your Azure Face API endpoint and key
+# Edit .env.local with your Azure Face API endpoint and key (see AZURE_SETUP.md)
 
-# 3. Start development server
+# 3. Start the server (listens on port 3001)
 npm run dev
 ```
 
-The app runs at **http://localhost:3001**.
-
-- `/` -- Main streaming page (share screen, detect faces, record)
-- `/processor` -- People list (all captured profiles)
-- `/processor/[id]` -- Individual profile (photos, conversations, edit)
-
-## Deploy to Azure App Service
-
-The app is deployed at:
-**https://glasses-demo-api-penispenis-b9h5eyd9gwehc3cx.canadacentral-01.azurewebsites.net**
-
-### Azure Portal Settings
-
-1. **Configuration > General settings**
-   - Stack: **Node**
-   - Major version: **Node 20 LTS**
-   - Startup Command: **`node server.js`**
-
-2. **Configuration > Application settings** (Environment variables)  
-   Set these exactly (use your own Face API endpoint and key from Azure Portal → your Face resource → Keys and Endpoint):
-   | Name | Value |
-   |------|-------|
-   | `NODE_ENV` | `production` |
-   | `AZURE_FACE_ENDPOINT` | Your Face API **Endpoint** URL (e.g. `https://faceingstuff.cognitiveservices.azure.com`) |
-   | `AZURE_FACE_KEY` | Your Face API **Key 1** (or Key 2) from the same Keys and Endpoint page |
-
-   **Where to get the key:** Azure Portal → your **Face** resource (Cognitive Services) → **Keys and Endpoint** → copy **Endpoint** and **Key 1**. Full step-by-step: see [AZURE_SETUP.md](./AZURE_SETUP.md).
-
-3. **Configuration > General settings**
-   - Web sockets: **On**
-
-4. **Monitoring > Log stream** -- view live logs for debugging startup issues
-
-### Method A: GitHub Deployment Center (recommended)
-
-1. Push this repo to GitHub
-2. In Azure Portal, go to your App Service > **Deployment Center**
-3. Source: **GitHub**, select your repo and branch
-4. Azure auto-detects Node.js and runs:
-   - `npm install`
-   - `npm run build` (runs `next build`)
-   - Starts with `node server.js`
-5. Every push to the branch auto-deploys
-
-### Method B: Zip Deploy (manual)
-
-**Windows:** From project root run `.\deploy-azure.ps1` to create `app.zip`, then upload it in Azure Portal (Deployment Center → Zip Deploy) or:
+In another terminal, start **ngrok** pointing at port 3001:
 
 ```bash
-az webapp deploy --resource-group <your-resource-group> --name glasses-demo-api-penispenis --src-path app.zip --type zip
+ngrok http 3001
 ```
 
-Full zip-deploy steps (what to include, Oryx build): see [AZURE_SETUP.md](./AZURE_SETUP.md).
+**First time?** Install ngrok and add your authtoken: `ngrok config add-authtoken <token>` (get the token from [dashboard.ngrok.com](https://dashboard.ngrok.com)). Then run `ngrok http 3001` again.
+
+The terminal will show your public URL. Use that URL for everything. Example (yours may differ after restarting ngrok):
+
+- **https://postamniotic-unstuttering-messiah.ngrok-free.dev/** — Main streaming page (share screen, detect faces, record)
+- **https://postamniotic-unstuttering-messiah.ngrok-free.dev/processor** — People list (all captured profiles)
+- **https://postamniotic-unstuttering-messiah.ngrok-free.dev/processor/[id]** — Individual profile (photos, conversations, edit)
+
+No localhost for access — use the ngrok URL only.
+
+**Port 3001 in use?** Stop the other process (e.g. close the terminal that ran `npm run dev`, or kill the process on 3001). **ngrok says "endpoint already online"?** Stop the existing ngrok tunnel (close that terminal or run `ngrok stop` in the ngrok session) or use `ngrok http 3001 --pooling-enabled` to run multiple tunnels.
+
+**"Invariant: missing bootstrap script" when opening via ngrok?** In `.env.local` set your ngrok URL so script/asset URLs load correctly, then restart the dev server:
+- `NEXT_PUBLIC_APP_URL=https://postamniotic-unstuttering-messiah.ngrok-free.dev`
+- `NEXT_HOSTNAME=postamniotic-unstuttering-messiah.ngrok-free.dev`
+If it still happens, delete the `.next` folder and run `npm run dev` again.
+
+**ChunkLoadError as soon as you open the ngrok URL?** Free ngrok often serves a "Visit Site" page instead of JS chunks, which breaks loading. Quick fixes: (1) Install a browser extension (e.g. ModHeader, Requestly) and add request header `ngrok-skip-browser-warning: true` for your ngrok domain, then reload; or (2) run in production so there are fewer chunks: `npm run build && npm start`, then open the ngrok URL again.
 
 ## Smoke Test
 
 ```bash
-# Replace BASE with your deployment URL or http://localhost:3001
-BASE=https://glasses-demo-api-penispenis-b9h5eyd9gwehc3cx.canadacentral-01.azurewebsites.net
+# Set BASE to your ngrok URL
+BASE=https://postamniotic-unstuttering-messiah.ngrok-free.dev
 
 # Test API
 curl -s "$BASE/api/faces" | head -c 200

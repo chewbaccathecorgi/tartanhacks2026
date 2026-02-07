@@ -17,7 +17,7 @@ src/app/
 ## Pages Overview
 
 ### 1. Main Streaming Page (`src/app/page.tsx`)
-- **URL**: `/` (e.g. `http://localhost:3001` or your Azure URL)
+- **URL**: `/` (use your ngrok URL, e.g. `https://abc123.ngrok-free.app/`)
 - **Purpose**: Share screen, detect faces with MediaPipe, capture with peace sign gesture
 - **Used on**: Laptop/Desktop browser
 
@@ -41,7 +41,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3001` in your browser.
+Then run **ngrok** (in another terminal): `ngrok http 3001`. Open your **ngrok URL** in the browser (no localhost).
 
 ## DO NOT TOUCH
 

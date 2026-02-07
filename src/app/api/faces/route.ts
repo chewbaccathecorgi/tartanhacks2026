@@ -81,22 +81,15 @@ export async function POST(req: NextRequest) {
       try {
         const { faces: detectedFaces, error: detectError } = await detectFaces(imageData);
         if (!detectError && detectedFaces.length === 0) {
-          // Azure successfully processed the image and found NO face — skip
-          console.log('[API] Azure Detect: no face found — skipping');
-          return NextResponse.json(
-            { error: 'No face detected in image', skipped: true },
-            { status: 422 }
-          );
-        }
-        if (detectError) {
-          // Azure had an error processing the image — trust MediaPipe, store anyway
+          // Azure said no face — still trust MediaPipe (crop came from face box), store locally
+          console.log('[API] Azure Detect: no face — trusting MediaPipe, storing locally');
+        } else if (detectError) {
           console.log('[API] Azure Detect error — trusting MediaPipe, storing anyway');
         } else {
           azureFaceId = detectedFaces[0].faceId;
           console.log(`[API] Azure detected face: ${azureFaceId}`);
         }
       } catch {
-        // Azure detect threw — trust MediaPipe and continue
         console.log('[API] Azure Detect exception — trusting MediaPipe, storing anyway');
       }
     }
