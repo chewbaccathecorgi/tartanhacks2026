@@ -17,8 +17,10 @@ const { WebSocketServer } = require('ws');
 const { handleConnection } = require('./backend/signaling');
 
 const dev = process.env.NODE_ENV !== 'production';
-const hostname = process.env.HOSTNAME || '0.0.0.0';
-const port = parseInt(process.env.PORT || '3000', 10);
+// BIND_HOST instead of HOSTNAME — Azure App Service sets HOSTNAME to the
+// container name which breaks server.listen(). Always bind 0.0.0.0.
+const hostname = process.env.BIND_HOST || '0.0.0.0';
+const port = parseInt(process.env.PORT || '3001', 10);
 
 const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
@@ -42,17 +44,16 @@ app.prepare().then(() => {
 
   server.on('upgrade', (request, socket, head) => {
     const { pathname } = parse(request.url || '', true);
-    console.log(`[WebSocket] Upgrade request to: ${pathname}`);
     
     if (pathname === '/api/signaling') {
+      // WebRTC signaling (legacy, kept for future use)
       wss.handleUpgrade(request, socket, head, (ws) => {
-        console.log('[WebSocket] Connection established');
+        console.log('[WebSocket] Signaling connection established');
         wss.emit('connection', ws, request);
       });
-    } else {
-      console.log(`[WebSocket] Rejected upgrade to: ${pathname}`);
-      socket.destroy();
     }
+    // All other upgrade requests (like /_next/webpack-hmr) are
+    // left alone so Next.js can handle them internally for HMR.
   });
 
   server.listen(port, hostname, () => {

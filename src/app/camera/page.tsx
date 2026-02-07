@@ -74,7 +74,11 @@ export default function CameraPage() {
 
         switch (data.type) {
           case 'registered':
-            setStatus('Registered - starting stream...');
+            setStatus('Waiting for viewer to connect...');
+            break;
+
+          case 'viewer-ready':
+            setStatus('Viewer connected - starting stream...');
             startStreaming();
             break;
 
