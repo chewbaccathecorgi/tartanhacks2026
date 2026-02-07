@@ -1,0 +1,10 @@
+# Python dependencies for Postgres + pgvector data layer (FastAPI)
+# Install via: pip install -r requirements.txt
+
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.9
+pgvector>=0.2.4
+pydantic>=2.0.0
+pydantic-settings>=2.0.0

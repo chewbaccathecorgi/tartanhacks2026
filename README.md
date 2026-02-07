@@ -2,6 +2,11 @@
 
 WebRTC-based video streaming from phone camera to laptop display.
 
+## Branches
+
+- **`main`** — Default app (Next.js viewer + signaling server).
+- **`feature/sql-vector-modular`** — Modular Postgres + pgvector data layer (FastAPI, migrations, test script). All DB-layer code lives in `backend/` on this branch. See `backend/README.md` and `backend/DATABASE_README.md`.
+
 ## Project Structure
 
 ```
@@ -11,11 +16,12 @@ viewer-webapp/
 │   ├── camera/page.tsx   ← Camera page (phone)
 │   ├── layout.tsx        
 │   └── globals.css       
-├── backend/              ← BACKEND (do not modify)
-│   ├── signaling.js      ← WebSocket signaling logic
+├── backend/               ← BACKEND
+│   ├── signaling.js      ← WebSocket signaling (all branches)
+│   ├── app/, migrations/, scripts/  ← SQL+pgvector layer (feature/sql-vector-modular)
 │   └── README.md
-├── server.js             ← Server entry point
-├── FRONTEND_README.md    ← Guide for frontend devs
+├── server.js              ← Server entry point
+├── FRONTEND_README.md     ← Guide for frontend devs
 └── package.json
 ```
 
