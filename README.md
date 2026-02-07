@@ -2,6 +2,8 @@
 
 Real-time face detection and recognition from Meta Glasses video stream. Uses MediaPipe for in-browser face/gesture detection and Azure Face API for profile deduplication.
 
+**Hosting:** The app runs on **Azure App Service** (no ngrok). Streaming and the processor work the same as before. Full setup and where to get the Face API key: **[AZURE_SETUP.md](./AZURE_SETUP.md)**.
+
 ## Project Structure
 
 ```
@@ -55,12 +57,15 @@ The app is deployed at:
    - Major version: **Node 20 LTS**
    - Startup Command: **`node server.js`**
 
-2. **Configuration > Application settings** (Environment variables)
+2. **Configuration > Application settings** (Environment variables)  
+   Set these exactly (use your own Face API endpoint and key from Azure Portal → your Face resource → Keys and Endpoint):
    | Name | Value |
    |------|-------|
    | `NODE_ENV` | `production` |
-   | `AZURE_FACE_ENDPOINT` | `https://faceingstuff.cognitiveservices.azure.com` |
-   | `AZURE_FACE_KEY` | *(your Face API key)* |
+   | `AZURE_FACE_ENDPOINT` | Your Face API **Endpoint** URL (e.g. `https://faceingstuff.cognitiveservices.azure.com`) |
+   | `AZURE_FACE_KEY` | Your Face API **Key 1** (or Key 2) from the same Keys and Endpoint page |
+
+   **Where to get the key:** Azure Portal → your **Face** resource (Cognitive Services) → **Keys and Endpoint** → copy **Endpoint** and **Key 1**. Full step-by-step: see [AZURE_SETUP.md](./AZURE_SETUP.md).
 
 3. **Configuration > General settings**
    - Web sockets: **On**
@@ -80,27 +85,13 @@ The app is deployed at:
 
 ### Method B: Zip Deploy (manual)
 
+**Windows:** From project root run `.\deploy-azure.ps1` to create `app.zip`, then upload it in Azure Portal (Deployment Center → Zip Deploy) or:
+
 ```bash
-# Build locally
-npm install
-npm run build
-
-# Zip everything (exclude node_modules and cache)
-# On Linux/Mac:
-zip -r app.zip . -x "node_modules/*" ".next/cache/*" ".env.local"
-
-# On Windows PowerShell:
-Compress-Archive -Path * -DestinationPath app.zip -Force
-
-# Deploy
-az webapp deploy \
-  --resource-group <your-resource-group> \
-  --name glasses-demo-api-penispenis \
-  --src-path app.zip \
-  --type zip
+az webapp deploy --resource-group <your-resource-group> --name glasses-demo-api-penispenis --src-path app.zip --type zip
 ```
 
-After zip deploy, Azure runs `npm install` automatically via Oryx build.
+Full zip-deploy steps (what to include, Oryx build): see [AZURE_SETUP.md](./AZURE_SETUP.md).
 
 ## Smoke Test
 
